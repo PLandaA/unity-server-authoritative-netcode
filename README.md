@@ -13,7 +13,7 @@ This is **Week 1 of 3**: the pure authoritative model, with no prediction yet. I
 - Each client draws only what it has received. With 100 ms per leg, a key press takes ~200 ms to show on screen.
 - A latency slider changes the delay live, and a HUD shows the server's position next to each client's view of it, so the lag is visible as a number, not just a feeling.
 
-[GIF: moving cube A with latency at 100 ms]
+![Client A moving with 100 ms one-way latency](docs/week1-latency-100ms.gif)
 
 ## How to run
 

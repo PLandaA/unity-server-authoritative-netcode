@@ -62,7 +62,8 @@ public class Orchestrator : MonoBehaviour{
     }
 
     private void Start(){
-        RTT = latencyMs * 2;
+        RTT = latencyMs * 2; 
+        currentLatency.text = $"Latency: {latencyMs}"; 
         rttText.text = $"RTT: {RTT}"; 
         UpdateTexts();
         slider.value = latencyMs;
