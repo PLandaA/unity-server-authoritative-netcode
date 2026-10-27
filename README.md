@@ -17,10 +17,10 @@ This is **Week 1 of 3**: the pure authoritative model, with no prediction yet. I
 
 ## How to run
 
-- Unity [version].
-- Open `Assets/Scenes/[SceneName]`, press Play.
+- Unity 6000.3.14f1.
+- Open `Assets/Scenes/TestScene`, press Play.
 - **WASD** moves client A, **arrow keys** move client B. The slider sets one-way latency in ms.
-- Tests: `Window → General → Test Runner → EditMode`. [N] tests cover `LagQueue`, `Server` and `Client` without opening a scene.
+- Tests: `Window → General → Test Runner → EditMode`. 8 tests cover `LagQueue`, `Server` and `Client` without opening a scene.
 
 ## Architecture
 
