@@ -42,4 +42,18 @@ public class ClientTest{
         client.Tick(0, Vector2.zero);
         Assert.AreEqual( new Vector2(3, 0), client.State.GetPosition(0));
     }
+
+    [Test]
+    public void Tick_TresVeces_NumeraInputsDesdeCero(){  
+        client.Tick(0, Vector2.zero);
+        client.Tick(0, Vector2.zero);
+        client.Tick(0, Vector2.zero);
+        Assert.IsTrue(inputQueue.TryReceive(0, out InputMessage input));
+        Assert.AreEqual(0, input.sequence); 
+        Assert.IsTrue(inputQueue.TryReceive(0, out input));
+        Assert.AreEqual(1, input.sequence);
+        Assert.IsTrue(inputQueue.TryReceive(0, out input));
+        Assert.AreEqual(2, input.sequence);
+        
+    }
 }
