@@ -1,24 +1,24 @@
 using UnityEngine;
 
 public class Server{
-    StateMessage state;
+    private StateMessage state;
 
     public StateMessage State => state;
 
-    LagQueue<InputMessage>[] _inputQueues;
-    LagQueue<StateMessage>[] _outputQueues;
-    float movementVel;
-    Vector2[] tickDirections;
-    int[] lastProcessedSequence;
+    private readonly LagQueue<InputMessage>[] inputQueues;
+    private readonly LagQueue<StateMessage>[] outputQueues;
+    private readonly float movementVel;
+    private readonly Vector2[] tickDirections;
+    private readonly int[] lastProcessedSequence;
     private int serverTick;
 
 
     public Server(LagQueue<InputMessage>[] inputQueues, LagQueue<StateMessage>[] outputQueues, float movementVel){
-        this._inputQueues = inputQueues;
-        this._outputQueues = outputQueues;
+        this.inputQueues = inputQueues;
+        this.outputQueues = outputQueues;
         this.movementVel = movementVel;
-        tickDirections = new Vector2[_inputQueues.Length];
-        lastProcessedSequence = new int[_inputQueues.Length];
+        tickDirections = new Vector2[inputQueues.Length];
+        lastProcessedSequence = new int[inputQueues.Length];
         System.Array.Fill(lastProcessedSequence, -1);
     }
 
@@ -31,27 +31,27 @@ public class Server{
 
     private void Drain(int currentTime){
         System.Array.Clear(tickDirections, 0, tickDirections.Length);
-        for (int i = 0; i < _inputQueues.Length; i++){
-            while (_inputQueues[i].TryReceive(currentTime, out var input)){
-                if (input.clientId != i){
-                    Debug.LogWarning($"Input con clientId {input.clientId} recibido por la cola {i}; ignorado");
+        for (int i = 0; i < inputQueues.Length; i++){
+            while (inputQueues[i].TryReceive(currentTime, out var input)){
+                if (input.ClientId != i){
+                    Debug.LogWarning($"Input with clientId {input.ClientId} received on queue {i}; ignored");
                     continue;
                 }
 
-                if (input.sequence <= lastProcessedSequence[i]){
+                if (input.Sequence <= lastProcessedSequence[i]){
                     continue;
                 }
 
-                tickDirections[i] = input.direction;
-                lastProcessedSequence[i] = input.sequence;
+                tickDirections[i] = input.Direction;
+                lastProcessedSequence[i] = input.Sequence;
             }
         }
     }
 
     private void Simulate(float dt){
-        for (int i = 0; i < _inputQueues.Length; i++){
-            Vector2 newPosition = state.GetPosition(i) + tickDirections[i] * movementVel * dt;
-            state.SetPosition(i, newPosition);
+        for (int i = 0; i < inputQueues.Length; i++){
+            Vector2 newPosition =  Movement.GetNewPosition(state.GetPosition(i), tickDirections[i], movementVel, dt);
+            state.SetPosition(i, newPosition); 
         }
     }
 
@@ -60,10 +60,10 @@ public class Server{
         for (int i = 0; i < lastProcessedSequence.Length; i++){
             state.SetLastProcessedSequence(i, lastProcessedSequence[i]);
         }
-        state.serverTick = serverTick;
+        state.ServerTick = serverTick;
 
-        for (int i = 0; i < _outputQueues.Length; i++){
-            _outputQueues[i].Send(state, currentTime);
+        foreach (var outputQueue in outputQueues){
+            outputQueue.Send(state, currentTime);
         }
 
         serverTick++;

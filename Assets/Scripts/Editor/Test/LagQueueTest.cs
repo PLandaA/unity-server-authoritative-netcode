@@ -3,7 +3,7 @@ using NUnit.Framework;
 
 public class LagQueueTest 
 {
-   LagQueue<string> lagQueue;  
+   private LagQueue<string> lagQueue;  
 
    [SetUp]
    public void SetUp(){
@@ -12,23 +12,23 @@ public class LagQueueTest
    }
    
    [Test]
-   public void TryReceive_EntregaJustoEnLaHora(){ 
-      lagQueue.Send("hola", 0);
-      Assert.IsFalse(lagQueue.TryReceive(99, out string mensaje)); 
-      Assert.IsTrue(lagQueue.TryReceive(100, out mensaje));  
-      Assert.AreEqual("hola", mensaje); 
-      Assert.IsFalse(lagQueue.TryReceive(100, out mensaje));  
+   public void TryReceive_DeliversExactlyOnTime(){ 
+      lagQueue.Send("hello", 0);
+      Assert.IsFalse(lagQueue.TryReceive(99, out string message)); 
+      Assert.IsTrue(lagQueue.TryReceive(100, out message));  
+      Assert.AreEqual("hello", message); 
+      Assert.IsFalse(lagQueue.TryReceive(100, out message));  
       
    }
 
    [Test]
-   public void TryReceive_SalenEnOrdenDeEntrada(){  
+   public void TryReceive_ReturnsInArrivalOrder(){  
       lagQueue.Send("a", 0);  
       lagQueue.Send("b", 50); 
-      Assert.IsTrue(lagQueue.TryReceive(100, out string mensaje)); 
-      Assert.AreEqual("a", mensaje);      
-      Assert.IsFalse(lagQueue.TryReceive(100, out mensaje)); 
-      Assert.IsTrue(lagQueue.TryReceive(150, out mensaje));
-      Assert.AreEqual("b", mensaje);
+      Assert.IsTrue(lagQueue.TryReceive(100, out string message)); 
+      Assert.AreEqual("a", message);      
+      Assert.IsFalse(lagQueue.TryReceive(100, out message)); 
+      Assert.IsTrue(lagQueue.TryReceive(150, out message));
+      Assert.AreEqual("b", message);
    }
 }

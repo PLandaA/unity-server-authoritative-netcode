@@ -1,31 +1,48 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
-public class Orchestrator : MonoBehaviour{ 
-    
+public class Orchestrator : MonoBehaviour{
     [SerializeField] private Slider slider;
+
+    [FormerlySerializedAs("toggle")] [SerializeField]
+    private Toggle clientPredictionToggle;
+
+    [SerializeField] private Toggle serverReconciliationToggle;
     [SerializeField] private Transform cubeA;
     [SerializeField] private Transform cubeB;
-    [SerializeField] float speed;
+    [SerializeField] private float speed;
     [SerializeField] private int tickMs = 50;
 
 
-    [SerializeField] private TMP_Text currentLatency; 
-    [SerializeField] private TMP_Text rttText; 
-    [SerializeField] private TMP_Text clientAPositionText; 
-    [SerializeField] private TMP_Text clientBPositionText; 
-    [SerializeField] private TMP_Text serverPositionText; 
+    [SerializeField] private TMP_Text currentLatency;
+    [SerializeField] private TMP_Text rttText;
+    [SerializeField] private TMP_Text serverPositionText;
+
+    [FormerlySerializedAs("clientAPositionText")] [SerializeField]
+    private TMP_Text clientAServerSaidPositionText;
+
+    [SerializeField] private TMP_Text clientAPredictedPositionText;
+
+    [FormerlySerializedAs("pendingInputCountText")] [SerializeField]
+    private TMP_Text clientAPendingInputCountText;
+
+    [FormerlySerializedAs("clientBPositionText")] [SerializeField]
+    private TMP_Text clientBServerSaidPositionText;
+
+    [SerializeField] private TMP_Text clientBPredictedPositionText;
+    [SerializeField] private TMP_Text clientBPendingInputCountText;
 
 
-    LagQueue<InputMessage>[] inputQueues;
-    LagQueue<StateMessage>[] outputQueues;
+    private LagQueue<InputMessage>[] inputQueues;
+    private LagQueue<StateMessage>[] outputQueues;
 
     private const int Players = 2;
-    int latencyMs = 100;
-    private int RTT;
-    float clocksMs;
+    private int latencyMs = 100;
+    private int rtt;
+    private float clockMs;
     private int nextTickMs;
 
     private Server server;
@@ -36,7 +53,8 @@ public class Orchestrator : MonoBehaviour{
     private bool measuring;
     private int pressFrame;
     private float pressTime;
-    private float lastX; 
+    private float lastX;
+    private float dt;
 
     private void Awake(){
         if (tickMs <= 0){
@@ -44,113 +62,152 @@ public class Orchestrator : MonoBehaviour{
             tickMs = 50;
         }
 
-        inputQueues = new LagQueue<InputMessage>[Players];
-        for (int i = 0; i < Players; i++){
-            inputQueues[i] = new LagQueue<InputMessage>(latencyMs);
-        }
+        inputQueues = CreateQueues<InputMessage>(Players, latencyMs);
+        outputQueues = CreateQueues<StateMessage>(Players, latencyMs);
 
-        outputQueues = new LagQueue<StateMessage>[Players];
-        for (int i = 0; i < Players; i++){
-            outputQueues[i] = new LagQueue<StateMessage>(latencyMs);
-        }
-
+        dt = tickMs / 1000f;
         server = new Server(inputQueues, outputQueues, speed);
-
-
-        clientA = new Client(0, inputQueues[0], outputQueues[0]);
-        clientB = new Client(1, inputQueues[1], outputQueues[1]);
+        clientA = new Client(0, inputQueues[0], outputQueues[0], speed, dt);
+        clientB = new Client(1, inputQueues[1], outputQueues[1], speed, dt);
     }
 
     private void Start(){
-        RTT = latencyMs * 2; 
-        currentLatency.text = $"Latency: {latencyMs}"; 
-        rttText.text = $"RTT: {RTT}"; 
-        UpdateTexts();
-        slider.value = latencyMs;
+        SetupLatencySlider();
+        SetupClientPrediction();
+        SetupServerReconciliation();
+        UpdatePositionTexts();
+    }
+
+    private void SetupLatencySlider(){
+        slider.SetValueWithoutNotify(latencyMs);
         slider.onValueChanged.AddListener(OnSliderChanged);
+        OnSliderChanged(latencyMs);
+    }
+
+    private void SetupClientPrediction(){
+        clientPredictionToggle.onValueChanged.AddListener(OnClientPredictionToggleChanged);
+        OnClientPredictionToggleChanged(clientPredictionToggle.isOn);
+    }
+
+    private void SetupServerReconciliation(){
+        serverReconciliationToggle.onValueChanged.AddListener(OnServerReconciliationToggleChanged);
+        OnServerReconciliationToggleChanged(serverReconciliationToggle.isOn);
     }
 
     private void Update(){
-        clocksMs += Time.deltaTime * 1000;
+        clockMs += Time.deltaTime * 1000;
 
-        if (Keyboard.current.dKey.wasPressedThisFrame && !measuring){ 
+        ProcessTicks();
+
+        cubeA.position = clientA.DisplayPosition;
+        cubeB.position = clientB.DisplayPosition;
+
+        MeasureInputDelay();
+        UpdatePositionTexts();
+    }
+
+    private void ProcessTicks(){
+        dt = tickMs / 1000f;
+        while (clockMs >= nextTickMs){
+            Vector2 dirA = ReadDirection(Key.W, Key.S, Key.D, Key.A);
+            Vector2 dirB = ReadDirection(Key.UpArrow, Key.DownArrow, Key.RightArrow, Key.LeftArrow);
+
+            clientA.Tick(nextTickMs, dirA);
+            clientB.Tick(nextTickMs, dirB);
+            server.Tick(nextTickMs, dt);
+            nextTickMs += tickMs;
+        }
+    }
+
+    //Debug instrumentation: logs how long it takes for cube A to react after pressing D.
+    private void MeasureInputDelay(){
+        var keyboard = Keyboard.current;
+        if (keyboard == null) return;
+
+        if (keyboard.dKey.wasPressedThisFrame && !measuring){
             pressFrame = Time.frameCount;
             pressTime = Time.time;
             measuring = true;
         }
-            
-        while (clocksMs >= nextTickMs){
-            Vector2 dirA = ReadInputsWASD();
-            Vector2 dirB = ReadInputsArrows();
 
-            clientA.Tick(nextTickMs, dirA);
-            clientB.Tick(nextTickMs, dirB);
-            server.Tick(nextTickMs, tickMs / 1000f);
-            nextTickMs += tickMs;
-        } 
-
-        cubeA.position = clientA.State.GetPosition(0);
-        cubeB.position = clientB.State.GetPosition(1);
-
-        if (measuring && cubeA.position.x != lastX){ 
-            Debug.Log("Delay Frame:" + (Time.frameCount - pressFrame)); 
-            Debug.Log("Delay ms:" + (Time.time - pressTime) * 1000); 
+        if (measuring && cubeA.position.x != lastX){
+            Debug.Log("Delay Frame:" + (Time.frameCount - pressFrame));
+            Debug.Log("Delay ms:" + (Time.time - pressTime) * 1000);
             measuring = false;
-        } 
+        }
+
         lastX = cubeA.position.x;
-        
-        UpdateTexts();
     }
 
-    private void UpdateTexts(){
-        clientAPositionText.text = $"Client A:  {clientA.State.GetPosition(0).ToString("F2")}";
-        clientBPositionText.text = $"Client B:  {clientB.State.GetPosition(1).ToString("F2")}";
-        serverPositionText.text = $"Server:  {server.State.GetPosition(0).ToString("F2")}";
+    private void UpdatePositionTexts(){
+        serverPositionText.text =
+            $"Server:  A {server.State.GetPosition(0).ToString("F2")}  B {server.State.GetPosition(1).ToString("F2")}";
+        UpdateClientTexts(clientA, 0, clientAServerSaidPositionText, clientAPredictedPositionText,
+            clientAPendingInputCountText);
+        UpdateClientTexts(clientB, 1, clientBServerSaidPositionText, clientBPredictedPositionText,
+            clientBPendingInputCountText);
     }
 
-    private Vector2 ReadInputsWASD(){
+    private static void UpdateClientTexts(Client client, int clientId, TMP_Text serverSaidText, TMP_Text predictedText,
+        TMP_Text pendingText){
+        serverSaidText.text = $"Server-said:  {client.State.GetPosition(clientId).ToString("F2")}";
+        predictedText.text = $"Predicted:  {client.DisplayPosition.ToString("F2")}";
+        pendingText.text = $"Pending Input Count:  {client.PendingInputCount}";
+    }
+
+    private void UpdateNetworkTexts(){
+        currentLatency.text = $"Latency: {latencyMs}";
+        rttText.text = $"RTT: {rtt}";
+    }
+
+    private static Vector2 ReadDirection(Key up, Key down, Key right, Key left){
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return Vector2.zero;
+
         Vector2 direction = Vector2.zero;
-        if (Keyboard.current == null) return Vector2.zero;
-        if (Keyboard.current.wKey.isPressed) direction.y += 1;
-        if (Keyboard.current.sKey.isPressed) direction.y -= 1;
-        if (Keyboard.current.dKey.isPressed)direction.x += 1;
-        if (Keyboard.current.aKey.isPressed) direction.x -= 1;
-
+        if (keyboard[up].isPressed) direction.y += 1;
+        if (keyboard[down].isPressed) direction.y -= 1;
+        if (keyboard[right].isPressed) direction.x += 1;
+        if (keyboard[left].isPressed) direction.x -= 1;
         return direction;
     }
 
-    private Vector2 ReadInputsArrows(){
-        Vector2 direction = Vector2.zero;
-
-        if (Keyboard.current == null) return Vector2.zero;
-        if (Keyboard.current.upArrowKey.isPressed) direction.y += 1;
-        if (Keyboard.current.downArrowKey.isPressed) direction.y -= 1;
-        if (Keyboard.current.rightArrowKey.isPressed) direction.x += 1;
-        if (Keyboard.current.leftArrowKey.isPressed) direction.x -= 1;
-
-
-        return direction;
-    }
-
-    void OnSliderChanged(float newValue){
-        latencyMs =  Mathf.RoundToInt(newValue); 
-        RTT = latencyMs * 2; 
-        currentLatency.text = $"Latency: {latencyMs}"; 
-        rttText.text = $"RTT: {RTT}";
-        SetLatency();
-    }
-
-    private void SetLatency(){
-        for (int i = 0; i < Players; i++){
-            inputQueues[i].latency = latencyMs;
+    private static LagQueue<T>[] CreateQueues<T>(int count, int latency){
+        LagQueue<T>[] queues = new LagQueue<T>[count];
+        for (int i = 0; i < count; i++){
+            queues[i] = new LagQueue<T>(latency);
         }
 
-        for (int i = 0; i < Players; i++){
-            outputQueues[i].latency = latencyMs;
+        return queues;
+    }
+
+    private static void SetLatency<T>(LagQueue<T>[] queues, int latency){
+        foreach (var queue in queues){
+            queue.Latency = latency;
         }
+    }
+
+    private void OnSliderChanged(float newValue){
+        latencyMs = Mathf.RoundToInt(newValue);
+        rtt = latencyMs * 2;
+        UpdateNetworkTexts();
+        SetLatency(inputQueues, latencyMs);
+        SetLatency(outputQueues, latencyMs);
+    }
+
+    private void OnClientPredictionToggleChanged(bool newValue){
+        clientA.PredictionEnabled = newValue;
+        clientB.PredictionEnabled = newValue;
+    }
+
+    private void OnServerReconciliationToggleChanged(bool newValue){
+        clientA.ReconciliationEnabled = newValue;
+        clientB.ReconciliationEnabled = newValue;
     }
 
     private void OnDestroy(){
         slider.onValueChanged.RemoveListener(OnSliderChanged);
+        clientPredictionToggle.onValueChanged.RemoveListener(OnClientPredictionToggleChanged);
+        serverReconciliationToggle.onValueChanged.RemoveListener(OnServerReconciliationToggleChanged);
     }
 }

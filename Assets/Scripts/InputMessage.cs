@@ -1,7 +1,7 @@
 using UnityEngine;
 
 public struct InputMessage{ 
-    public int clientId;
-    public Vector2 direction;
-    public int sequence; 
+    public int ClientId;
+    public Vector2 Direction;
+    public int Sequence; 
 }

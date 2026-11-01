@@ -1,26 +1,26 @@
 using UnityEngine;
 
 public struct StateMessage{
-    public Vector2 p0, p1;
-    public int lastProcessedSequenceClient0;
-    public int lastProcessedSequenceClient1;
+    public Vector2 P0, P1;
+    public int ServerTick;
 
-    public int serverTick;
+    private int lastProcessedSequenceClient1;
+    private int lastProcessedSequenceClient0;
 
     public Vector2 GetPosition(int clientId){
         if (clientId < 0 || clientId > 1){
             return Vector2.zero;
         }
 
-        return clientId == 0 ? p0 : p1;
+        return clientId == 0 ? P0 : P1;
     }
 
     public void SetPosition(int clientId, Vector2 position){
         if (clientId == 0){
-            p0 = position;
+            P0 = position;
         }
         else if (clientId == 1){
-            p1 = position;
+            P1 = position;
         }
     }
 

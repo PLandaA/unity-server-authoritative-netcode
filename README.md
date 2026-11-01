@@ -46,7 +46,15 @@ Server tick (every 50 ms):  Drain  →  Simulate  →  Publish
 - **Multiple inputs in one tick: last one wins.** Provisional. With numbered inputs each one will map to exactly one tick.
 - **An input whose `clientId` does not match the queue it arrived on is ignored and logged.** The server never trusts a message to say who sent it.
 - **Clients tick before the server.** A message sent this tick is processed this tick; with zero latency the reverse order would add one tick.
-- **Ticks use `nextTickMs`, not the real clock.** Every tick happens at an exact multiple of 50 ms regardless of frame rate, so delivery times are regular and a long frame can run several ticks correctly.
+- **Ticks use `nextTickMs`, not the real clock.** Every tick happens at an exact multiple of 50 ms regardless of frame rate, so delivery times are regular and a long frame can run several ticks correctly. 
+- **One shared movement function (`Movement`).** The client and the server must simulate *identically*, and "the same formula" is not enough: floating-point multiplication is not associative, so `direction * speed * dt` and `direction * (speed * dt)` can differ in the last bit. Accumulated 20 times a second that becomes a micro-correction on every snapshot. Sharing the code, not the formula, is what makes reconciliation produce zero visible correction.
+- **Sequence numbers and a cumulative ack.** The server does not acknowledge inputs one by one; it reports the highest sequence it has processed. One integer covers any number of inputs in flight, costs nothing to track on the server, and tolerates lost snapshots (the next one carries a higher number). Inputs with a sequence lower than or equal to the last processed one are ignored, which also neutralises duplicate or replayed inputs.
+- **`-1` means "nothing processed yet".** With the first input numbered 0, initialising `lastProcessedSequence` to 0 would silently discard every client's first input as a duplicate. The existing Week 1 test caught it.
+- **Pruning uses `<=`, not `<`.** The snapshot's position already includes the input numbered `lastProcessed`. Re-applying it would leave the client one step ahead of the server forever, invisibly.
+- **Pending inputs live in a `List`.** Chosen for clarity. In production this would be a fixed-size circular buffer with a power-of-two size (e.g. 1024): bounded memory, zero allocations after start-up, O(1) lookup by `sequence & (size - 1)`, and 1024 ticks is far more than any round-trip worth staying connected for.
+- **Reconcile only against the last snapshot of the tick.** If two arrive in one tick, the later one carries a higher `lastProcessed` and subsumes the earlier one.
+- **Reconciliation does not touch the server.** `Server` is unaware of prediction; it only reports what it processed. Keeping all reconciliation state on the client is what keeps the server cheap and simple.
+- **Known mismatch: "last input wins" under jitter.** The server applies at most one input per tick per client; if two of a client's inputs ever land in the same server tick, the server moves once while the client replays twice. It cannot happen with constant latency and one input per tick, but it would with jitter. The real fix is to stamp each input with its tick and have the server simulate one tick per input.
 
 ## What it feels like (measurements)
 
@@ -62,18 +70,70 @@ The `0..tick` term is the wait until the next tick after the key press. At zero 
 
 [If applicable: the first measurement at "300 ms" came out ~200 ms higher than predicted. Working the formula backwards pointed at 400 ms, which turned out to be the slider's actual value.]
 
+
+## Week 2: client-side prediction and server reconciliation
+
+Week 1 was correct but unplayable: every key press took a full round-trip (~200 ms at 100 ms per leg) to show on screen. Week 2 removes that delay for the player's own character without giving up server authority.
+
+**Client-side prediction.** The client no longer waits. When it sends an input, it also applies it locally, immediately, using the *same* `Movement.GetNewPosition` the server uses. It is not guessing what the server will do; it is computing it ahead of time.
+
+**Server reconciliation.** Every input carries a sequence number, and every snapshot carries the last sequence number the server processed for each client. When a snapshot arrives, the client (1) takes the server's position as the truth up to that sequence number, (2) drops the pending inputs the server has already seen, and (3) re-applies the pending inputs the server has not seen yet, in order. If the server agreed with the prediction, the result is bit-for-bit the position the client already had, so nothing moves. If the server disagreed (a collision, a push), the correction is applied *and* the player's later inputs are preserved on top of it: a small adjustment instead of a teleport.
+
+Both techniques live entirely in `Client.Tick`. `Server` did not change between Week 1 and Week 2 except for one thing: it now includes `lastProcessedSequence` per client in every snapshot. The server never knows that clients predict.
+
+```
+client has sent:   #5  #6  #7  #8  #9          (all applied locally already)
+snapshot arrives:  position P, lastProcessed = 6
+
+reconcile:  predicted = P                 accept the truth up to #6
+            drop #5, #6                   already confirmed
+            replay #7, #8, #9             what the server has not seen
+```
+
+![Three modes at 200 ms latency: no prediction, naive prediction, prediction + reconciliation](docs/week2-prediction-reconciliation.gif)
+
+### Why prediction alone does nothing here
+
+In Gambetta's article, prediction without reconciliation produces a visible stutter: the player jumps back every time a snapshot arrives. In this prototype it produces nothing at all. The server publishes a snapshot every tick, so after the first round-trip a snapshot arrives *every* client tick. Each tick the client predicts one step forward and the snapshot immediately overwrites it. The prediction never survives long enough to be seen; the measured delay is identical to Week 1 (see table). Reconciliation is not a refinement of prediction; without it, prediction is simply erased.
+
+### Measurements
+
+Press-to-screen delay for client A, Editor, ~[fps] fps, tick 50 ms:
+
+| Mode | 100 ms one-way | 400 ms one-way | Formula |
+|---|---|---|---|
+| Prediction off | 202–238 ms | 832–845 ms | `2 × latency + (0..tick)` |
+| Prediction on, reconciliation off | 196–227 ms | 803–830 ms | same (prediction is erased each tick) |
+| Prediction on, reconciliation on | 0–42 ms | 26–38 ms | `0..tick`, independent of latency |
+
+Pending (unconfirmed) inputs with prediction and reconciliation on, at 0 / 100 / 200 / 400 ms one-way: **1 / 4 / 8 / 16**, i.e. `RTT / tick`. That number is how many ticks of the future the client is predicting at any moment.
+
+Note the last row: prediction removes the *network* latency but not the *tick* latency. Inputs are sampled and predicted inside `Client.Tick`, every 50 ms, so a key pressed just after a tick waits up to 50 ms. Production games sample input and predict at frame rate, or visually interpolate the local character between ticks. Left as a known limitation.
+
+
 ## Known limitations / Next
 
 - No client-side prediction: the player feels the full round-trip on their own character.
 - No server reconciliation.
 - No interpolation of the remote player: it moves in 50 ms steps.
 - No packet loss, reordering or sequence numbers.
+- The remote player still moves in 50 ms steps: no interpolation yet.
+- Prediction runs at tick rate, not frame rate (up to one tick of input delay remains).
+- No packet loss, reordering or jitter; the simulated channel is perfectly ordered.
+- No physics or collisions, so the server never actually disagrees with the client outside of tests.
+- Pending-input buffer is unbounded (a `List`); see design decisions.
 
-**Week 2** — client-side prediction and server reconciliation with numbered inputs.
+
 **Week 3** — interpolation of remote players; optional real UDP transport with LiteNetLib.
 
 ## References
 
 - Gabriel Gambetta, *Fast-Paced Multiplayer, Part I: Client-Server Game Architecture* — https://gabrielgambetta.com/client-server-game-architecture.html
 - Glenn Fiedler, *What Every Programmer Needs To Know About Game Networking* — https://gafferongames.com/categories/game-networking/
-- Tom Weiland, *Riptide Multiplayer Tutorials*, Parts 1–2 — https://www.youtube.com/playlist?list=PLXkn83W0Qkfn3qF7NU4OEtVwOD6U2wphJ
+- Tom Weiland, *Riptide Multiplayer Tutorials*, Parts 1–2 — https://www.youtube.com/playlist?list=PLXkn83W0Qkfn3qF7NU4OEtVwOD6U2wphJ 
+- Gabriel Gambetta, *Fast-Paced Multiplayer, Part II: Client-Side Prediction and Server Reconciliation* — https://gabrielgambetta.com/client-side-prediction-server-reconciliation.html
+- Glenn Fiedler, *Reliability, Ordering and Congestion Avoidance over UDP* — https://new.gafferongames.com/post/reliability_ordering_and_congestion_avoidance_over_udp/
+- git-amend, *Unity Netcode 100% Server Authoritative with Client Prediction and Reconciliation* — https://www.youtube.com/watch?v=-lGsuCEWkM0
+- Ajackster, *How To Do Client Prediction* — https://www.youtube.com/watch?v=TFLD9HWOc2k
+
+

@@ -2,8 +2,8 @@ using NUnit.Framework;
 using UnityEngine;
 
 public class ServerTest{
-    LagQueue<InputMessage>[] inputQueues;
-    LagQueue<StateMessage>[] outputQueues;
+    private LagQueue<InputMessage>[] inputQueues;
+    private LagQueue<StateMessage>[] outputQueues;
 
     private const int Players = 2;
     private Server server;
@@ -24,13 +24,13 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_DosInputsDerecha_MueveSoloAlCliente0(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 0 };
+    public void Tick_TwoRightInputs_MovesOnlyClient0(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 0 };
 
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
 
-        inputMessage.sequence = 1;
+        inputMessage.Sequence = 1;
         inputQueues[0].Send(inputMessage, 50);
         server.Tick(50, 0.05f);
 
@@ -39,13 +39,13 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_SinInput_ElJugadorNoSeMueve(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 0 };
+    public void Tick_WithoutInput_PlayerDoesNotMove(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 0 };
 
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
 
-        inputMessage.sequence = 1;
+        inputMessage.Sequence = 1;
         inputQueues[0].Send(inputMessage, 50);
         server.Tick(50, 0.05f);
 
@@ -56,8 +56,8 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_MismaPosicionDelServidorConElCliente(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 0 };
+    public void Tick_ServerAndClientSharePosition(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 0 };
 
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
@@ -70,11 +70,11 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_InputsNumerados_ActualizaLastProcessed(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 0 };
+    public void Tick_NumberedInputs_UpdatesLastProcessed(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 0 };
 
         inputQueues[0].Send(inputMessage, 0);
-        inputMessage.sequence = 1;
+        inputMessage.Sequence = 1;
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
         Assert.AreEqual(1, server.State.GetLastProcessedSequence(0));
@@ -82,8 +82,8 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_InputDuplicado_SeIgnora(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 1 };
+    public void Tick_DuplicateInput_IsIgnored(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 1 };
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
         float position = server.State.GetPosition(0).x;
@@ -94,12 +94,12 @@ public class ServerTest{
     }
 
     [Test]
-    public void Tick_InputViejo_SeIgnora(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 3 };
+    public void Tick_OldInput_IsIgnored(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 3 };
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
         float position = server.State.GetPosition(0).x;
-        inputMessage.sequence = 2;
+        inputMessage.Sequence = 2;
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
         Assert.AreEqual(position, server.State.GetPosition(0).x);
@@ -107,13 +107,13 @@ public class ServerTest{
     }
 
     [Test]
-    public void Publish_SnapshotLlevaLastProcessedYTick(){
-        InputMessage inputMessage = new InputMessage{ clientId = 0, direction = Vector2.right, sequence = 0 };
+    public void Publish_SnapshotCarriesLastProcessedAndTick(){
+        InputMessage inputMessage = new InputMessage{ ClientId = 0, Direction = Vector2.right, Sequence = 0 };
         inputQueues[0].Send(inputMessage, 0);
         server.Tick(0, 0.05f);
         Assert.IsTrue(outputQueues[0].TryReceive(0, out var snapshot));
         Assert.AreEqual(0, snapshot.GetLastProcessedSequence(0));
         Assert.AreEqual(-1, snapshot.GetLastProcessedSequence(1));
-        Assert.AreEqual(0, snapshot.serverTick);
+        Assert.AreEqual(0, snapshot.ServerTick);
     }
 }
