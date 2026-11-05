@@ -13,13 +13,20 @@ public class Server{
     private int serverTick;
 
 
-    public Server(LagQueue<InputMessage>[] inputQueues, LagQueue<StateMessage>[] outputQueues, float movementVel){
+    public Server(LagQueue<InputMessage>[] inputQueues, LagQueue<StateMessage>[] outputQueues, float movementVel,
+        Vector2[] startPositions = null){
         this.inputQueues = inputQueues;
         this.outputQueues = outputQueues;
         this.movementVel = movementVel;
         tickDirections = new Vector2[inputQueues.Length];
         lastProcessedSequence = new int[inputQueues.Length];
         System.Array.Fill(lastProcessedSequence, -1);
+
+        if (startPositions != null){
+            for (int i = 0; i < startPositions.Length; i++){
+                state.SetPosition(i, startPositions[i]);
+            }
+        }
     }
 
 

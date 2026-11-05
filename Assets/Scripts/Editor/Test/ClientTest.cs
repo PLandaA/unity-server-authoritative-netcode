@@ -58,7 +58,7 @@ public class ClientTest{
     }
 
     [Test]
-    public void Reconcile_SnapshotAtrasado_NoSalta(){
+    public void Reconcile_StaleSnapshot_DoesNotJump(){
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
@@ -72,7 +72,7 @@ public class ClientTest{
     }
 
     [Test]
-    public void Reconcile_ServidorDifiere_CorrigeYReaplica(){
+    public void Reconcile_ServerDiffers_CorrectsAndReapplies(){
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
@@ -86,7 +86,7 @@ public class ClientTest{
     }
 
     [Test]
-    public void Reconcile_ConfirmaTodo_VaciaBuffer(){
+    public void Reconcile_ConfirmsAll_EmptiesBuffer(){
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
@@ -95,11 +95,11 @@ public class ClientTest{
         stateMessage.SetLastProcessedSequence(0, 2);
         outputQueue.Send(stateMessage, 0);
         client.Tick(0, Vector2.zero);
-        Assert.AreEqual(1, client.PendingInputCount, 0.0001f);
+        Assert.AreEqual(1, client.PendingInputCount);
     }
 
     [Test]
-    public void Tick_SinPrediccion_NoAcumulaBuffer(){
+    public void Tick_WithoutPrediction_DoesNotAccumulateBuffer(){
         client.PredictionEnabled = false;
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
@@ -110,10 +110,8 @@ public class ClientTest{
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
-        client.Tick(0, Vector2.right); 
+        client.Tick(0, Vector2.right);
         Assert.AreEqual(0, client.PendingInputCount);
-        
-
     }
 
     [Test]
@@ -121,7 +119,7 @@ public class ClientTest{
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
         client.Tick(0, Vector2.right);
-        client.Tick(0, Vector2.right); 
+        client.Tick(0, Vector2.right);
         client.ReconciliationEnabled = false;
         StateMessage stateMessage = new StateMessage();
         stateMessage.P0 = new Vector2(0.05f, 0);
@@ -132,4 +130,29 @@ public class ClientTest{
         Assert.AreEqual(0, client.PendingInputCount);
     }
 
+    [Test]
+    public void GetRemotePosition_Interpolates(){
+        StateMessage stateMessage = new StateMessage();
+        stateMessage.P1 = new Vector2(0, 0);
+        outputQueue.Send(stateMessage, 0);
+        client.Tick(0, Vector2.zero);
+        stateMessage.P1 = new Vector2(1, 0);
+        outputQueue.Send(stateMessage, 50);
+        client.Tick(50, Vector2.zero);
+        Assert.AreEqual(.5f, client.GetRemotePosition(125).x);
+    }
+
+
+    [Test]
+    public void GetRemotePosition_Disabled_ReturnsLatest(){
+        StateMessage stateMessage = new StateMessage();
+        stateMessage.P1 = new Vector2(0, 0);
+        outputQueue.Send(stateMessage, 0);
+        client.Tick(0, Vector2.zero);
+        stateMessage.P1 = new Vector2(1, 0);
+        outputQueue.Send(stateMessage, 50);
+        client.Tick(50, Vector2.zero);
+        client.InterpolationEnabled = false;
+        Assert.AreEqual(1, client.GetRemotePosition(125).x);
+    }
 }

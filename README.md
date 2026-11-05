@@ -2,27 +2,31 @@
 
 A minimal server-authoritative multiplayer prototype built from scratch in Unity, with no networking framework. One server and two clients run inside a single scene, connected by message queues with artificial latency, in the spirit of Gabriel Gambetta's *Fast-Paced Multiplayer* demo.
 
-The goal is to implement and be able to explain, from first principles, the core techniques behind responsive networked gameplay: **client-side prediction**, **server reconciliation** and **entity interpolation**.
+The goal is to implement and be able to explain, from first principles, the core techniques behind responsive networked gameplay: **client-side prediction**, **server reconciliation** and **entity interpolation**. All three are implemented, tested and measured here, each with a toggle so the problem it solves can be seen live.
 
-**Weeks 1 and 2 of 3 are done.** Week 1 is the pure authoritative model, intentionally laggy so the problem is visible and measurable. Week 2 adds client-side prediction and server reconciliation, which remove that lag for the local player without giving up server authority. Week 3 will add interpolation of the remote player.
+- **Week 1** — the pure authoritative model, intentionally laggy so the problem is visible and measurable.
+- **Week 2** — client-side prediction and server reconciliation: the local player responds instantly without giving up server authority.
+- **Week 3** — entity interpolation: the remote player moves smoothly instead of stepping once per snapshot.
 
 ## What it does
 
 - One `Server` and two `Client`s live in the same scene and only talk through `LagQueue<T>`, a message queue that delivers each message after a configurable delay.
 - Clients send **numbered intentions** (`InputMessage`), never positions. The server simulates at a fixed tick and publishes the authoritative state (`StateMessage`) to every client, including the last input it processed from each one.
-- Each client predicts its own movement locally and reconciles it against every snapshot. The remote player is drawn from the latest snapshot received.
-- A latency slider changes the delay live; two toggles switch prediction and reconciliation on and off; a HUD shows the server's position, each client's predicted and server-confirmed positions, and how many inputs are in flight.
+- Each client predicts its own movement locally and reconciles it against every snapshot. The remote player is drawn interpolated between the two snapshots surrounding a point slightly in the past.
+- Two sliders (one-way latency, interpolation delay) and three toggles (prediction, reconciliation, interpolation) change behaviour live. The HUD shows, per client, its predicted and server-confirmed positions, inputs in flight, and where it draws the other player next to where the server actually has them.
 
 ![Client A moving with 100 ms one-way latency, no prediction](docs/week1-latency-100ms.gif)
 
 ![Three modes at 200 ms latency: no prediction, naive prediction, prediction + reconciliation](docs/week2-prediction-reconciliation.gif)
 
+![Remote player with and without interpolation; ghosts are what the other client sees](docs/week3-interpolation.gif)
+
 ## How to run
 
 - Unity 6000.3.14f1.
 - Open `Assets/Scenes/TestScene`, press Play.
-- **WASD** moves client A, **arrow keys** move client B. The slider sets one-way latency in ms; the toggles enable prediction and reconciliation for both clients.
-- Tests: `Window → General → Test Runner → EditMode`. 19 tests cover `LagQueue`, `Server`, `Client` and `Movement` without opening a scene.
+- **WASD** moves client A (teal), **arrow keys** move client B (lavender). The translucent ghosts are each player *as seen by the other client*.
+- Tests: `Window → General → Test Runner → EditMode`. 25 tests cover `LagQueue`, `Movement`, `SnapshotInterpolator`, `Server` and `Client` without opening a scene.
 
 ## Architecture
 
@@ -32,13 +36,15 @@ Client B ──InputMessage──► LagQueue ──►        ──StateMessag
 
 Server tick (every 50 ms):  Drain  →  Simulate  →  Publish
 Client tick (every 50 ms):  Send + Predict  →  Receive  →  Reconcile
+Client frame:               remote position = interpolate(now − delay)
 ```
 
 - **`LagQueue<T>`** — a FIFO of `(deliveryTime, message)`. `Send` stamps `now + latency`; `TryReceive` only looks at the front and delivers it when its time has come. O(1), no allocations, testable with a fake clock.
 - **`Movement`** — one static, pure function: `position + direction * speed * dt`. The only place movement is computed, used by both server and client.
-- **`Server`** — owns the only authoritative state. `Drain` empties every input queue, discards inputs with a stale sequence number and keeps the direction received this tick; `Simulate` calls `Movement`; `Publish` sends the same snapshot to every client, including `lastProcessedSequence` per client and the server tick. `Simulate` knows nothing about the network, and `Server` knows nothing about prediction.
-- **`Client`** — sends numbered inputs, applies them locally at once (prediction), keeps the unconfirmed ones in a buffer, and on each snapshot accepts the server's position and replays the unconfirmed inputs (reconciliation). Draws the remote player from the latest snapshot.
-- **`Orchestrator`** — the only `MonoBehaviour`. Owns the clock (integer ms), runs the ticks, reads the keyboard, wires the UI and draws the cubes. No networking logic lives here.
+- **`SnapshotInterpolator`** — a small buffer of `(timeMs, position)` samples. `Sample(t)` finds the two samples around `t`, lerps between them and prunes everything older. Clamps to the first or last sample instead of extrapolating.
+- **`Server`** — owns the only authoritative state. `Drain` empties every input queue, discards inputs with a stale sequence number and keeps the direction received this tick; `Simulate` calls `Movement`; `Publish` sends the same snapshot to every client, including `lastProcessedSequence` per client and the server tick. `Simulate` knows nothing about the network, and `Server` knows nothing about prediction or interpolation.
+- **`Client`** — sends numbered inputs, applies them locally at once (prediction), keeps the unconfirmed ones in a buffer, and on each snapshot accepts the server's position and replays the unconfirmed inputs (reconciliation). Feeds the remote player's position from every snapshot into its interpolator and answers `GetRemotePosition(now)` per frame.
+- **`Orchestrator`** — the only `MonoBehaviour`. Owns the clock (integer ms for ticks, float ms for rendering), runs the ticks, reads the keyboard, wires the UI and draws the four cubes. No networking logic lives here.
 
 ## Week 1: the authoritative server
 
@@ -95,10 +101,30 @@ Pending (unconfirmed) inputs with prediction and reconciliation on, at 0 / 100 /
 
 Note the last row: prediction removes the *network* latency but not the *tick* latency. Inputs are sampled and predicted inside `Client.Tick`, every 50 ms, so a key pressed just after a tick waits up to 50 ms. Production games sample input and predict at frame rate, or visually interpolate the local character between ticks. Left as a known limitation.
 
+## Week 3: entity interpolation
+
+The local player is smooth because it is predicted from its own inputs. The remote player cannot be predicted: the client has no inputs for it, only snapshots, one every 50 ms. Drawing it at the latest snapshot means 20 positions per second, a visible step each tick.
+
+**Entity interpolation** does not try to guess where the remote player is *now*. It draws them where they were a short, fixed time ago (the interpolation delay, 100 ms = two snapshots by default), an instant for which the client already holds a snapshot before and a snapshot after, and lerps between the two. Every frame, not every tick: `renderTime = now − delay`, find the surrounding pair, `Lerp`. The result is continuous motion built only from real server data, at the cost of seeing the other player slightly in the past.
+
+```
+snapshots of B:  (900, x=1.0)  (950, x=1.5)  (1000, x=2.0)
+now = 1030, delay = 100  →  renderTime = 930  →  between 900 and 950, fraction 0.6  →  x = 1.3
+now = 1060              →  renderTime = 960  →  between 950 and 1000, fraction 0.2  →  x = 1.6
+```
+
+### What it looks like
+
+- With interpolation off, the ghost advances in steps of `speed × tick` (0.15 units at speed 3, 0.5 at speed 10). With it on, it slides.
+- The ghost trails the real player by `(latency + delay) × speed` while they move: 0.30 units at latency 100, delay 100, speed 1.5. When the player stops, the ghost catches up 200 ms later. Seeing someone "in the past" is only visible while the past and the present differ.
+- With delay 300, the ghost stays still for ~400 ms (100 latency + 300 delay) after the real player starts moving, then follows perfectly smoothly. The slider is the whole trade-off in one control: more delay buys smoothness and tolerance to late snapshots, and costs how far in the past the other player is shown.
+- With delay 0 the ghost steps again: `renderTime = now` is always after the newest sample, so the interpolator clamps to it and never interpolates.
+- Raising the latency slider abruptly makes the ghost pause rather than drift: the interpolator clamps to its last sample instead of extrapolating.
+
 ## Design decisions
 
-- **Time is integer milliseconds.** Avoids float drift in delivery times and makes tests exact.
-- **The channel preserves order.** `TryReceive` only inspects the front of the queue, so a message cannot overtake an older one. If latency is lowered mid-game, new messages wait behind old ones and arrive later than configured. Real UDP gives no such guarantee; sequence numbers (Week 2) make reordering detectable, although the simulated channel never reorders.
+- **Time is integer milliseconds.** Avoids float drift in delivery times and makes tests exact. Rendering uses the same clock as a float so interpolation can be sampled per frame.
+- **The channel preserves order.** `TryReceive` only inspects the front of the queue, so a message cannot overtake an older one. If latency is lowered mid-game, new messages wait behind old ones and arrive later than configured. Real UDP gives no such guarantee; sequence numbers make reordering detectable, although the simulated channel never reorders.
 - **Messages and state are `struct`s.** A snapshot in flight must never share memory with the server's live state; passing a `struct` through `Send` copies it, so a later tick cannot alter a message that has not arrived yet. With real serialization this problem disappears on its own; it exists precisely because the network is simulated in memory.
 - **Server state is private.** The outside world gets a read-only copy. Nothing but `Simulate` can write a position; that is what "authoritative" means in code.
 - **Fixed tick, not per-message.** Same `dt` every time makes the simulation deterministic: the same inputs always produce the same positions. That property is what lets a client re-simulate the server's work. The cost is up to one tick of extra latency.
@@ -114,23 +140,30 @@ Note the last row: prediction removes the *network* latency but not the *tick* l
 - **Reconcile only against the last snapshot of the tick.** If two arrive in one tick, the later one carries a higher `lastProcessed` and subsumes the earlier one.
 - **Reconciliation does not touch the server.** `Server` is unaware of prediction; it only reports what it processed. Keeping all reconciliation state on the client is what keeps the server cheap and simple.
 - **Known mismatch: "last input wins" under jitter.** The server applies at most one input per tick per client; if two of a client's inputs ever land in the same server tick, the server moves once while the client replays twice. It cannot happen with constant latency and one input per tick, but it would with jitter. The real fix is to stamp each input with its tick and have the server simulate one tick per input.
+- **Interpolation samples are stamped with client arrival time** (Gambetta's approach), so `Sample(now − delay)` and the samples share one clock with no conversion. Stamping with the server tick instead (Source's approach) is more stable under jitter, because arrival time inherits network noise, but needs a client-to-server clock offset. Noted as the production alternative.
+- **The interpolator never extrapolates.** Past the newest sample it returns that sample. If snapshots are late, the remote player pauses instead of drifting through walls; dead reckoning is the alternative for high-speed, predictable motion.
+- **Interpolation delay defaults to two snapshots (100 ms).** The minimum that guarantees a pair of samples around `renderTime` under steady delivery; anything larger only buys tolerance to late or lost snapshots.
+- **The interpolator prunes as it samples.** Everything older than the current pair is dropped on each `Sample`, so the buffer stays at two or three entries.
+- **The server and the clients are never given the same memory for state.** Start positions live in one static array in the orchestrator and are copied into each.
 
 ## Known limitations / Next
 
-- The remote player still moves in 50 ms steps: no interpolation yet.
-- Prediction runs at tick rate, not frame rate (up to one tick of input delay remains).
-- No packet loss, reordering or jitter; the simulated channel is perfectly ordered.
+- **No lag compensation.** With 100 ms latency and 100 ms interpolation delay, each client sees the other 200 ms in the past. In a game like Among Us, a kill that looks "in range" on the killer's screen may not be on the victim's; resolving that needs the server to rewind hitboxes to the shooter's view, the fourth technique in Gambetta's series and the one not implemented here.
+- Prediction runs at tick rate, not frame rate (up to one tick of input delay remains). The local player is not visually interpolated between ticks.
+- No packet loss, reordering or jitter; the simulated channel is perfectly ordered. The design handles them (sequence numbers, clamped interpolation) but nothing exercises those paths outside tests.
 - No physics or collisions, so the server never actually disagrees with the client outside of tests.
 - Pending-input buffer is unbounded (a `List`); see design decisions.
+- Two players only: `otherId = 1 − clientId`, and `StateMessage` holds fixed fields rather than arrays.
 
-**Week 3** — interpolation of remote players; optional real UDP transport with LiteNetLib.
+Possible next steps: a circular input buffer; a real UDP transport (LiteNetLib) replacing `LagQueue` without touching `Server` or `Client`; jitter and packet loss in the simulated channel; lag compensation.
 
 ## References
 
 - Gabriel Gambetta, *Fast-Paced Multiplayer, Part I: Client-Server Game Architecture* — https://gabrielgambetta.com/client-server-game-architecture.html
 - Gabriel Gambetta, *Fast-Paced Multiplayer, Part II: Client-Side Prediction and Server Reconciliation* — https://gabrielgambetta.com/client-side-prediction-server-reconciliation.html
+- Gabriel Gambetta, *Fast-Paced Multiplayer, Part III: Entity Interpolation* — https://gabrielgambetta.com/entity-interpolation.html
 - Glenn Fiedler, *What Every Programmer Needs To Know About Game Networking* — https://gafferongames.com/categories/game-networking/
 - Glenn Fiedler, *Reliability, Ordering and Congestion Avoidance over UDP* — https://new.gafferongames.com/post/reliability_ordering_and_congestion_avoidance_over_udp/
-- Tom Weiland, *Riptide Multiplayer Tutorials*, Parts 1–2 — https://www.youtube.com/playlist?list=PLXkn83W0Qkfn3qF7NU4OEtVwOD6U2wphJ
+- Tom Weiland, *Riptide Multiplayer Tutorials*, Parts 1–3 — https://www.youtube.com/playlist?list=PLXkn83W0Qkfn3qF7NU4OEtVwOD6U2wphJ
 - git-amend, *Unity Netcode 100% Server Authoritative with Client Prediction and Reconciliation* — https://www.youtube.com/watch?v=-lGsuCEWkM0
 - Ajackster, *How To Do Client Prediction* — https://www.youtube.com/watch?v=TFLD9HWOc2k
