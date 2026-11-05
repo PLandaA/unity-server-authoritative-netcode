@@ -4,6 +4,8 @@ A minimal server-authoritative multiplayer prototype built from scratch in Unity
 
 The goal is to implement and be able to explain, from first principles, the core techniques behind responsive networked gameplay: **client-side prediction**, **server reconciliation** and **entity interpolation**. All three are implemented, tested and measured here, each with a toggle so the problem it solves can be seen live.
 
+**Headline result:** at 100 ms one-way latency, press-to-screen delay for the local player drops from **202–238 ms** to **0–42 ms** with prediction and reconciliation, and stays within one tick even at 400 ms one-way (**26–38 ms**, down from 832–845 ms).
+
 - **Week 1** — the pure authoritative model, intentionally laggy so the problem is visible and measurable.
 - **Week 2** — client-side prediction and server reconciliation: the local player responds instantly without giving up server authority.
 - **Week 3** — entity interpolation: the remote player moves smoothly instead of stepping once per snapshot.
@@ -127,7 +129,7 @@ now = 1060              →  renderTime = 960  →  between 950 and 1000, fracti
 - **The channel preserves order.** `TryReceive` only inspects the front of the queue, so a message cannot overtake an older one. If latency is lowered mid-game, new messages wait behind old ones and arrive later than configured. Real UDP gives no such guarantee; sequence numbers make reordering detectable, although the simulated channel never reorders.
 - **Messages and state are `struct`s.** A snapshot in flight must never share memory with the server's live state; passing a `struct` through `Send` copies it, so a later tick cannot alter a message that has not arrived yet. With real serialization this problem disappears on its own; it exists precisely because the network is simulated in memory.
 - **Server state is private.** The outside world gets a read-only copy. Nothing but `Simulate` can write a position; that is what "authoritative" means in code.
-- **Fixed tick, not per-message.** Same `dt` every time makes the simulation deterministic: the same inputs always produce the same positions. That property is what lets a client re-simulate the server's work. The cost is up to one tick of extra latency.
+- **Fixed tick, not per-message.** Same `dt` every time makes the simulation deterministic: the same inputs always produce the same positions. That property is what lets a client re-simulate the server's work. The cost is up to one tick of extra latency. "Deterministic" holds here in a narrow sense: client and server run the same binary in the same process. Across different CPUs, compilers or platforms, floating-point results can diverge in the last bits, so a real client would still drift slightly from the server. That is why this design reconciles toward the server's truth instead of relying on lockstep determinism: any drift is corrected by the next snapshot.
 - **Multiple inputs in one tick: last one wins.** See the known mismatch below.
 - **An input whose `clientId` does not match the queue it arrived on is ignored and logged.** The server never trusts a message to say who sent it.
 - **Clients tick before the server.** A message sent this tick is processed this tick; with zero latency the reverse order would add one tick.
@@ -156,6 +158,12 @@ now = 1060              →  renderTime = 960  →  between 950 and 1000, fracti
 - Two players only: `otherId = 1 − clientId`, and `StateMessage` holds fixed fields rather than arrays.
 
 Possible next steps: a circular input buffer; a real UDP transport (LiteNetLib) replacing `LagQueue` without touching `Server` or `Client`; jitter and packet loss in the simulated channel; lag compensation.
+
+## Related
+
+- **VR Survival Zombies**: the shared-authority counterpart. A two-player online co-op VR shooter built on Photon Fusion 2 in Shared Mode, in Early Access on the Meta Horizon Store. [Repository](https://github.com/PLandaA/VRZombies) · [Store page](https://www.meta.com/experiences/vr-survival-zombies/1310775452126168/)
+
+Shared authority fits a two-player co-op game, where the holder of an object is the only one who needs its truth and nobody profits from cheating a friend. Server authority, as in this prototype, is what a competitive game needs.
 
 ## References
 
